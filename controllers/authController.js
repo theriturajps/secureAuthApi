@@ -111,7 +111,6 @@ exports.logout = async (req, res, next) => {
 
 		// Clear the cookies
 		res.clearCookie('accessToken');
-		res.clearCookie('refreshToken'); // Add this if you're using refreshToken cookie
 
 		res.status(200).json({
 			status: 'success',
@@ -142,7 +141,10 @@ exports.forgotPassword = async (req, res, next) => {
 
 		res.status(200).json({
 			status: 'success',
-			message: 'OTP sent to email!'
+			message: 'OTP sent to email!',
+			otp: {
+				expiresIn: `The OTP expires in 10 minutes.`
+			}
 		});
 	} catch (err) {
 		next(err);
@@ -164,9 +166,11 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 		// Delete the OTP record
 		await OTP.deleteOne({ _id: otpRecord._id });
 
-		// Generate a temporary token for password reset (use only accessToken)
-		const { accessToken: tempToken } = signToken(userRecord._id, userRecord.email);
-		userRecord.refreshToken = tempToken;
+		//	Generate a temporary token for password reset
+		const { refreshToken } = signToken(userRecord._id, userRecord.email); // Generate a temporary token
+		const tempToken = refreshToken; // Use the refreshToken as a temporary token
+
+		userRecord.refreshToken = tempToken; // Store the tempToken in refreshToken field
 		await userRecord.save({ validateBeforeSave: false });
 
 		const cookieOptions = {
@@ -176,14 +180,12 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 			sameSite: 'strict'
 		};
 
-
 		res.cookie('tempToken', tempToken, cookieOptions);
 
 		res.status(200).json({
 			status: 'success',
 			message: 'OTP verified!',
 			token: {
-				expiresIn: `this token will expire in 10 minutes`,
 				tempToken
 			}
 		});
@@ -194,48 +196,65 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 
 exports.resetPassword = async (req, res, next) => {
 	try {
-		const { password, passwordConfirm } = req.body;
-		const tempToken = req.cookies.tempToken; // Get the tempToken from cookies
+		console.log('Resetting password...');
+		const { newPassword, newPasswordConfirm } = req.body;
+		const tempToken = req.cookies?.tempToken;
 
-		if (!password || !passwordConfirm) { 
-			return next(new AppError('Please provide password and passwordConfirm!', 400));
+		// Check for missing fields
+		if (!newPassword || !newPasswordConfirm) {
+			return next(new AppError('Please provide newPassword and newPasswordConfirm!', 400));
 		}
 
+		// Check if passwords match
+		if (newPassword !== newPasswordConfirm) {
+			return next(new AppError('Passwords do not match!', 400));
+		}
+
+		// Check if tempToken is present
 		if (!tempToken) {
-			return next(new AppError('Token is required!', 400));
+			return next(new AppError('tempToken is required!', 400));
 		}
 
-		// 1) Verify the tempToken
-		const decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
+		// 1) Verify tempToken
+		let decoded;
+		try {
+			decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
+		} catch (err) {
+			return next(new AppError('Invalid or expired token!', 401));
+		}
 
-		// 2) Find user by id from the token
+		// 2) Find user
 		const user = await User.findById(decoded.id);
 		if (!user) {
 			return next(new AppError('User not found!', 404));
 		}
 
-		// 3) Check if the tempToken matches the stored refreshToken
+		// 3) Check if token matches the stored refresh token
 		if (user.refreshToken !== tempToken) {
-			return next(new AppError('Invalid token!', 401)); // Token is invalid
+			return next(new AppError('Invalid token match!', 401));
 		}
 
 		// 4) Update password
-		user.password = password;
-		user.passwordConfirm = passwordConfirm;
+		user.password = newPassword;
+
+		// Save with validation
 		await user.save();
 
-		// 5) Clear the refresh token
+		// 5) Clear refresh token and cookie
 		user.refreshToken = undefined;
-		res.clearCookie('tempToken'); // Clear the tempToken cookie
-
 		await user.save({ validateBeforeSave: false });
 
-		// 6) Log the user in, send JWT
-		await createSendToken(user, 200, res);
+		res.clearCookie('tempToken');
+
+		// 6) (Optional) Send success response
+		res.status(200).json({
+			status: 'success',
+			message: 'Password has been reset successfully!',
+		});
 	} catch (err) {
 		next(err);
 	}
-};
+}
 
 exports.refreshToken = async (req, res, next) => {
 	try {

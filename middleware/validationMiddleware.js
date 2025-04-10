@@ -48,6 +48,7 @@ exports.validateEmail = (req, res, next) => {
 };
 
 exports.validatePassword = (req, res, next) => {
+
 	const { newPassword, newPasswordConfirm } = req.body;
 
 	if (!newPassword || !newPasswordConfirm) {
