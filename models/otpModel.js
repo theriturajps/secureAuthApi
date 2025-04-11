@@ -10,8 +10,15 @@ const otpSchema = new mongoose.Schema({
 		default: 'verification'
 	},
 	attempts: { type: Number, default: 0 },
-	createdAt: { type: Date, default: Date.now, expires: '10m' } // 10 minutes
+	expiresAt: {
+		type: Date,
+		default: () => new Date(Date.now() + 10 * 60 * 1000), // 10 minutes from now
+		index: { expires: 0 } // TTL index
+	}
 });
+
+// Create TTL index
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const OTP = mongoose.model('OTP', otpSchema);
 

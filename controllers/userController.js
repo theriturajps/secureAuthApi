@@ -162,7 +162,8 @@ exports.verifyEmailUpdate = async (req, res, next) => {
 
 		const otpRecord = await OTP.findOne({
 			email: req.user.email,
-			purpose: 'email-update'
+			purpose: 'email-update',
+			expiresAt: { $gt: new Date() }
 		}).sort({ createdAt: -1 });
 
 		if (!otpRecord) {

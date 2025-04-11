@@ -53,7 +53,7 @@ exports.verifyEmail = async (req, res, next) => {
 		const otpRecord = await OTP.findOne({
 			email,
 			purpose: 'verification',
-			createdAt: { $gt: new Date(Date.now() - 10 * 60 * 1000) } // Check if OTP is within 10 minutes
+			expiresAt: { $gt: new Date() } // Only find OTPs that haven't expired
 		}).sort({ createdAt: -1 });
 
 		if (!otpRecord) {
@@ -261,7 +261,8 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 		// Find the most recent OTP for the email with the correct purpose
 		const otpRecord = await OTP.findOne({
 			email,
-			purpose: 'password-reset'
+			purpose: 'password-reset',
+			expiresAt: { $gt: new Date() }
 		}).sort({ createdAt: -1 });
 
 		const userRecord = await User.findOne({ email }).select('-password');
