@@ -1,22 +1,22 @@
-const { isValidEmail, isEmpty, isMinLength, doStringsMatch } = require('../utils/validation');
-const { AppError } = require('./errorMiddleware');
+const validator = require('validator');
+const AppError = require('./errorMiddleware').AppError;
 
 exports.validateSignup = (req, res, next) => {
 	const { username, email, password, passwordConfirm } = req.body;
 
-	if (isEmpty(username) || isEmpty(email) || isEmpty(password) || isEmpty(passwordConfirm)) {
+	if (!username || !email || !password || !passwordConfirm) {
 		return next(new AppError('Please provide all required fields!', 400));
 	}
 
-	if (!isValidEmail(email)) {
+	if (!validator.isEmail(email)) {
 		return next(new AppError('Please provide a valid email!', 400));
 	}
 
-	if (!doStringsMatch(password, passwordConfirm)) {
+	if (password !== passwordConfirm) {
 		return next(new AppError('Passwords do not match!', 400));
 	}
 
-	if (!isMinLength(password, 8)) {
+	if (password.length < 8) {
 		return next(new AppError('Password must be at least 8 characters!', 400));
 	}
 
@@ -26,7 +26,7 @@ exports.validateSignup = (req, res, next) => {
 exports.validateLogin = (req, res, next) => {
 	const { username, password } = req.body;
 
-	if (isEmpty(username) || isEmpty(password)) {
+	if (!username || !password) {
 		return next(new AppError('Please provide username and password!', 400));
 	}
 
@@ -36,11 +36,11 @@ exports.validateLogin = (req, res, next) => {
 exports.validateEmail = (req, res, next) => {
 	const { email } = req.body;
 
-	if (isEmpty(email)) {
+	if (!email) {
 		return next(new AppError('Please provide an email!', 400));
 	}
 
-	if (!isValidEmail(email)) {
+	if (!validator.isEmail(email)) {
 		return next(new AppError('Please provide a valid email!', 400));
 	}
 
@@ -48,17 +48,18 @@ exports.validateEmail = (req, res, next) => {
 };
 
 exports.validatePassword = (req, res, next) => {
+
 	const { newPassword, newPasswordConfirm } = req.body;
 
-	if (isEmpty(newPassword) || isEmpty(newPasswordConfirm)) {
+	if (!newPassword || !newPasswordConfirm) {
 		return next(new AppError('Please provide password and password confirmation!', 400));
 	}
 
-	if (!doStringsMatch(newPassword, newPasswordConfirm)) {
+	if (newPassword !== newPasswordConfirm) {
 		return next(new AppError('Passwords do not match!', 400));
 	}
 
-	if (!isMinLength(newPassword, 8)) {
+	if (newPassword.length < 8) {
 		return next(new AppError('Password must be at least 8 characters!', 400));
 	}
 

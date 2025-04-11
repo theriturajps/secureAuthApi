@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
+const validator = require('validator');
 const bcrypt = require('bcryptjs');
-const { isValidEmail } = require('../utils/validation');
 
 const userSchema = new mongoose.Schema({
 	username: {
@@ -17,26 +17,12 @@ const userSchema = new mongoose.Schema({
 		maxlength: [60, 'Bio must be less than 60 characters'],
 		default: 'Welcome! This is my bio.'
 	},
-	name: {
-		type: String,
-		trim: true,
-		default: ''
-	},
-	profileImageUrl: {
-		type: String,
-		default: ''
-	},
 	email: {
 		type: String,
 		required: [true, 'Please provide an email'],
 		unique: true,
 		lowercase: true,
-		validate: {
-			validator: function (email) {
-				return isValidEmail(email);
-			},
-			message: 'Please provide a valid email'
-		}
+		validate: [validator.isEmail, 'Please provide a valid email']
 	},
 	password: {
 		type: String,
