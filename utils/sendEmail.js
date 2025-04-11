@@ -3,18 +3,23 @@ const { AppError } = require('../middleware/errorMiddleware');
 
 const sendEmail = async (options) => {
 	try {
+		if (!options.email) {
+			throw new Error('Recipient email is required');
+		}
+
 		const mailOptions = {
 			from: {
 				name: "secureAuth",
 				address: process.env.SMTP_USER,
 			},
 			to: options.email,
-			subject: options.subject,
-			text: options.message,
-			html: options.html
+			subject: options.subject || 'No Subject',
+			text: options.message || '',
+			html: options.html || ''
 		};
 
 		await transporter.sendMail(mailOptions);
+		return true;
 	} catch (err) {
 		console.error('Error sending email:', err);
 		throw new AppError('There was an error sending the email. Try again later!', 500);
@@ -25,7 +30,7 @@ const getSimpleEmailTemplate = (user, content) => {
 	return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="margin-bottom: 20px;">
-            <p>Dear ${user.email},</p>
+            <p>Dear ${user.email || 'User'},</p>
             ${content}
             <p>Thank You,<br><strong>secureAuth Team</strong></p>
         </div>
@@ -62,6 +67,7 @@ const sendPasswordResetOTP = async (user, otp) => {
         <p>Please use this OTP to reset your password:</p>
         <p style="font-size: 18px; font-weight: bold; color: #0084ff;">${otp}</p>
         <p><em>This code will expire in 10 minutes.</em></p>
+        <p>If you did not request a password reset, please ignore this email and your password will remain unchanged.</p>
     `;
 
 	await sendEmail({
@@ -72,8 +78,27 @@ const sendPasswordResetOTP = async (user, otp) => {
 	});
 };
 
+const sendEmailChangeNotification = async (user, newEmail) => {
+	const subject = 'Email Change Notification';
+	const message = `Your email has been changed to ${newEmail}. If you did not make this change, please contact support immediately.`;
+
+	const content = `
+        <p>Your email address has been successfully changed to:</p>
+        <p style="font-size: 18px; font-weight: bold; color: #0084ff;">${newEmail}</p>
+        <p><em>If you did not make this change, please contact support immediately.</em></p>
+    `;
+
+	await sendEmail({
+		email: newEmail,
+		subject,
+		message,
+		html: getSimpleEmailTemplate(user, content)
+	});
+}
+
 module.exports = {
 	sendEmail,
 	sendVerificationEmail,
-	sendPasswordResetOTP
+	sendPasswordResetOTP,
+	sendEmailChangeNotification
 };
