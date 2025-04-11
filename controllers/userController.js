@@ -21,12 +21,10 @@ exports.getMe = async (req, res, next) => {
 
 exports.updateMe = async (req, res, next) => {
 	try {
-		// 1) Create error if user POSTs password data
 		if (req.body.password || req.body.passwordConfirm) {
 			return next(new AppError('This route is not for password updates. Please use /update-password.', 400));
 		}
 
-		// 2) Filter out unwanted fields - only allow bio, name, and profileImageUrl
 		const allowedFields = ['bio', 'name', 'profileImageUrl'];
 		const filteredBody = {};
 		const updatedFields = {};
@@ -38,8 +36,6 @@ exports.updateMe = async (req, res, next) => {
 			}
 		});
 
-		// 3) Check if any fields are actually updated
-
 		if (req.body.username) {
 			return next(new AppError('Username cannot be updated through this endpoint', 400));
 		}
@@ -48,19 +44,16 @@ exports.updateMe = async (req, res, next) => {
 			return next(new AppError('Role cannot be updated through this endpoint', 400));
 		}
 
-		if (req.body.email === req.user.email) { 
+		if (req.body.email && req.body.email === req.user.email) {
 			return next(new AppError('New email cannot be the same as the current email', 400));
 		}
 
-		// 4) Handle email update separately (with OTP verification)
 		if (req.body.email && req.body.email !== req.user.email) {
-
 			const existingUser = await User.findOne({ email: req.body.email });
 			if (existingUser) {
 				return next(new AppError('Email already in use!', 400));
 			}
 
-			// Generate OTP and store it with the pending email
 			const otp = generateOTP();
 			await OTP.create({
 				email: req.user.email,
@@ -69,7 +62,6 @@ exports.updateMe = async (req, res, next) => {
 				purpose: 'email-update'
 			});
 
-			// Send verification email to the NEW email address
 			await sendVerificationEmail({ email: req.body.email }, otp);
 
 			return res.status(200).json({
@@ -84,13 +76,12 @@ exports.updateMe = async (req, res, next) => {
 			});
 		}
 
-		// 5) Update allowed user information
-		await User.findByIdAndUpdate(req.user._id, filteredBody, {
+		const updatedUser = await User.findByIdAndUpdate(req.user._id, filteredBody, {
 			new: true,
 			runValidators: true
 		});
 
-		const responseData = {}; // To store the response data
+		const responseData = {};
 		if (Object.keys(updatedFields).length > 0) {
 			responseData.updatedFields = updatedFields;
 		}
@@ -105,50 +96,103 @@ exports.updateMe = async (req, res, next) => {
 	}
 };
 
+exports.resendEmailUpdateOTP = async (req, res, next) => {
+	try {
+		const { newEmail } = req.body;
+
+		if (!newEmail) {
+			return next(new AppError('New email is required!', 400));
+		}
+
+		if (newEmail === req.user.email) {
+			return next(new AppError('New email cannot be the same as current email!', 400));
+		}
+
+		const existingUser = await User.findOne({ email: newEmail });
+		if (existingUser) {
+			return next(new AppError('Email already in use!', 400));
+		}
+
+		const recentOTP = await OTP.findOne({
+			email: req.user.email,
+			purpose: 'email-update',
+			createdAt: { $gt: new Date(Date.now() - 60 * 1000) }
+		});
+
+		if (recentOTP) {
+			return next(
+				new AppError('Please wait 1 minute before requesting another OTP.', 429)
+			);
+		}
+
+		await OTP.deleteMany({ email: req.user.email, purpose: 'email-update' });
+
+		const otp = generateOTP();
+		await OTP.create({
+			email: req.user.email,
+			newEmail,
+			otp,
+			purpose: 'email-update'
+		});
+
+		await sendVerificationEmail({ email: newEmail }, otp);
+
+		res.status(200).json({
+			status: 'success',
+			message: 'New OTP sent to the new email for verification!',
+			data: {
+				pendingUpdate: {
+					email: newEmail
+				},
+				requiresVerification: true
+			}
+		});
+	} catch (err) {
+		next(err);
+	}
+};
+
 exports.verifyEmailUpdate = async (req, res, next) => {
 	try {
 		const { otp } = req.body;
-		const userId = req.user._id;
 
-		// Find the most recent email update OTP for this user
+		if (!otp) {
+			return next(new AppError('OTP is required!', 400));
+		}
+
 		const otpRecord = await OTP.findOne({
 			email: req.user.email,
 			purpose: 'email-update'
 		}).sort({ createdAt: -1 });
 
 		if (!otpRecord) {
-			return next(new AppError('OTP not found or expired!', 400));
+			return next(new AppError('No OTP found. Please request a new email update.', 404));
 		}
 
-		// Check if OTP matches
 		if (otpRecord.otp !== otp) {
-			return next(new AppError('Invalid OTP!', 400));
+			otpRecord.attempts += 1;
+			await otpRecord.save();
+
+			if (otpRecord.attempts >= 3) {
+				await OTP.deleteOne({ _id: otpRecord._id });
+				return next(new AppError('Too many failed attempts. Please request a new OTP.', 400));
+			}
+
+			return next(new AppError('Invalid OTP. Please try again.', 400));
 		}
 
-		// Check if OTP is expired
-		if (otpRecord.expiresAt < new Date()) {
-			await OTP.deleteOne({ _id: otpRecord._id });
-			return next(new AppError('OTP has expired!', 400));
-		}
-
-		// Verify the new email isn't already in use
 		const emailExists = await User.findOne({ email: otpRecord.newEmail });
 		if (emailExists) {
 			return next(new AppError('Email already in use!', 400));
 		}
 
-		// Update the user's email
 		const updatedUser = await User.findByIdAndUpdate(
-			userId,
+			req.user._id,
 			{ email: otpRecord.newEmail, isVerified: true },
 			{ new: true, runValidators: true }
 		);
 
-		// Delete all OTPs for this operation
-		await OTP.deleteMany({
-			email: req.user.email,
-			purpose: 'email-update'
-		});
+		await OTP.deleteOne({ _id: otpRecord._id });
 
 		res.status(200).json({
 			status: 'success',
@@ -166,12 +210,8 @@ exports.verifyEmailUpdate = async (req, res, next) => {
 
 exports.deleteMe = async (req, res, next) => {
 	try {
-		// Permanently delete the user
 		await User.findByIdAndDelete(req.user._id);
-
-		// Clear the accessToken cookie
 		res.clearCookie('accessToken');
-
 		res.status(204).json({
 			status: 'success',
 			message: 'Your account has been permanently deleted.',
@@ -186,15 +226,12 @@ exports.updatePassword = async (req, res, next) => {
 	try {
 		const { currentPassword, newPassword, newPasswordConfirm } = req.body;
 
-		// 1) Get user from collection
 		const user = await User.findById(req.user._id).select('+password');
 
-		// 2) Check if POSTed current password is correct
 		if (!(await user.comparePassword(currentPassword, user.password))) {
 			return next(new AppError('Your current password is wrong.', 401));
 		}
 
-		// 3) If so, update password
 		user.password = newPassword;
 		user.passwordConfirm = newPasswordConfirm;
 		await user.save();
@@ -204,11 +241,11 @@ exports.updatePassword = async (req, res, next) => {
 			message: 'Password updated successfully!',
 			data: {
 				updatedFields: {
-					password: 'updated' // We don't return the actual password
+					password: 'updated'
 				}
 			}
 		});
 	} catch (err) {
 		next(err);
 	}
-}
+};

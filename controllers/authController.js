@@ -22,7 +22,7 @@ exports.signup = async (req, res, next) => {
 			passwordConfirm
 		});
 
-		// Generate OTP
+		// Generate OTP with the correct purpose
 		const otp = generateOTP();
 		await OTP.create({
 			email,
@@ -46,28 +46,32 @@ exports.verifyEmail = async (req, res, next) => {
 	try {
 		const { email, otp } = req.body;
 
-		// Find the most recent OTP for the email
+		if (!email || !otp) {
+			return next(new AppError('Email and OTP are required!', 400));
+		}
+
 		const otpRecord = await OTP.findOne({
 			email,
-			purpose: 'verification'
+			purpose: 'verification',
+			createdAt: { $gt: new Date(Date.now() - 10 * 60 * 1000) } // Check if OTP is within 10 minutes
 		}).sort({ createdAt: -1 });
 
 		if (!otpRecord) {
-			return next(new AppError('OTP not found or expired!', 400));
+			return next(new AppError('OTP expired or not found. Please request a new one.', 404));
 		}
 
-		// Check if OTP matches
 		if (otpRecord.otp !== otp) {
-			return next(new AppError('Invalid OTP!', 400));
+			otpRecord.attempts += 1;
+			await otpRecord.save();
+
+			if (otpRecord.attempts >= 3) {
+				await OTP.deleteOne({ _id: otpRecord._id });
+				return next(new AppError('Too many failed attempts. Please request a new OTP.', 400));
+			}
+
+			return next(new AppError('Invalid OTP. Please try again.', 400));
 		}
 
-		// Check if OTP is expired
-		if (otpRecord.expiresAt < new Date()) {
-			await OTP.deleteOne({ _id: otpRecord._id });
-			return next(new AppError('OTP has expired!', 400));
-		}
-
-		// Update user verification status
 		const user = await User.findOneAndUpdate(
 			{ email },
 			{ isVerified: true },
@@ -78,11 +82,59 @@ exports.verifyEmail = async (req, res, next) => {
 			return next(new AppError('User not found!', 404));
 		}
 
-		// Delete all OTPs for this email (cleanup)
-		await OTP.deleteMany({ email });
-
-		// Log the user in
+		await OTP.deleteOne({ _id: otpRecord._id });
 		await createSendToken(user, 200, res);
+	} catch (err) {
+		next(err);
+	}
+};
+
+exports.resendVerificationOTP = async (req, res, next) => {
+	try {
+		const { email } = req.body;
+
+		if (!email) {
+			return next(new AppError('Email is required!', 400));
+		}
+
+		// Check if user exists
+		const user = await User.findOne({ email });
+		if (!user) {
+			return next(new AppError('User not found!', 404));
+		}
+
+		// Check if user is already verified
+		if (user.isVerified) {
+			return next(new AppError('Email is already verified!', 400));
+		}
+
+		// Check if there's a recent OTP (within the last minute)
+		const recentOTP = await OTP.findOne({
+			email,
+			purpose: 'verification',
+			createdAt: { $gt: new Date(Date.now() - 60 * 1000) } // Last 1 minute
+		});
+
+		if (recentOTP) {
+			return next(
+				new AppError('Please wait 1 minute before requesting another OTP.', 429)
+			);
+		}
+
+		// Delete any existing verification OTPs for this email
+		await OTP.deleteMany({ email, purpose: 'verification' });
+
+		// Generate new OTP
+		const otp = generateOTP();
+		await OTP.create({ email, otp, purpose: 'verification' });
+
+		// Send verification email
+		await sendVerificationEmail(user, otp);
+
+		res.status(200).json({
+			status: 'success',
+			message: 'New OTP sent to email for verification!'
+		});
 	} catch (err) {
 		next(err);
 	}
@@ -116,41 +168,17 @@ exports.login = async (req, res, next) => {
 	}
 };
 
-exports.logout = async (req, res, next) => {
-	try {
-		
-		// Delete refresh token from database
-		const user = await User.findById(req.user._id);
-
-		if (user) {
-			user.refreshToken = undefined;
-			await user.save({ validateBeforeSave: false });
-		}
-
-		// Clear the cookies
-		res.clearCookie('accessToken');
-
-		res.status(200).json({
-			status: 'success',
-			message: 'Logged out successfully!',
-			data: null
-		});
-	} catch (err) {
-		next(err);
-	}
-};
-
 exports.forgotPassword = async (req, res, next) => {
 	try {
 		const { email } = req.body;
 
-		// 1) Get user based on POSTed email
+		// Get user based on POSTed email
 		const user = await User.findOne({ email });
 		if (!user) {
 			return next(new AppError('There is no user with that email address.', 404));
 		}
 
-		// 2) Generate OTP
+		// Generate OTP with the correct purpose
 		const otp = generateOTP();
 		await OTP.create({
 			email,
@@ -158,14 +186,63 @@ exports.forgotPassword = async (req, res, next) => {
 			purpose: 'password-reset'
 		});
 
-		// 3) Send it to user's email
+		// Send it to user's email
 		await sendPasswordResetOTP(user, otp);
 
 		res.status(200).json({
 			status: 'success',
 			message: 'OTP sent to email!',
 			otp: {
-				expiresIn: `The OTP expires in 10 minutes.`
+				expiresIn: `The OTP expires in 15 minutes.`
+			}
+		});
+	} catch (err) {
+		next(err);
+	}
+};
+
+exports.resendPasswordResetOTP = async (req, res, next) => {
+	try {
+		const { email } = req.body;
+
+		if (!email) {
+			return next(new AppError('Email is required!', 400));
+		}
+
+		// Check if user exists
+		const user = await User.findOne({ email });
+		if (!user) {
+			return next(new AppError('User not found!', 404));
+		}
+
+		// Check if there's a recent OTP (within the last minute)
+		const recentOTP = await OTP.findOne({
+			email,
+			purpose: 'password-reset',
+			createdAt: { $gt: new Date(Date.now() - 60 * 1000) } // Last 1 minute
+		});
+
+		if (recentOTP) {
+			return next(
+				new AppError('Please wait 1 minute before requesting another OTP.', 429)
+			);
+		}
+
+		// Delete any existing password reset OTPs for this email
+		await OTP.deleteMany({ email, purpose: 'password-reset' });
+
+		// Generate new OTP
+		const otp = generateOTP();
+		await OTP.create({ email, otp, purpose: 'password-reset' });
+
+		// Send password reset OTP
+		await sendPasswordResetOTP(user, otp);
+
+		res.status(200).json({
+			status: 'success',
+			message: 'New OTP sent to email for password reset!',
+			otp: {
+				expiresIn: `The OTP expires in 15 minutes.`
 			}
 		});
 	} catch (err) {
@@ -177,38 +254,50 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 	try {
 		const { email, otp } = req.body;
 
-		// Find the most recent OTP for the email
+		if (!email || !otp) {
+			return next(new AppError('Email and OTP are required!', 400));
+		}
+
+		// Find the most recent OTP for the email with the correct purpose
 		const otpRecord = await OTP.findOne({
 			email,
 			purpose: 'password-reset'
 		}).sort({ createdAt: -1 });
 
-		if (!otpRecord) {
-			return next(new AppError('OTP not found or expired!', 400));
-		}
-
-		// Check if OTP matches
-		if (otpRecord.otp !== otp) {
-			return next(new AppError('Invalid OTP!', 400));
-		}
-
-		// Check if OTP is expired
-		if (otpRecord.expiresAt < new Date()) {
-			await OTP.deleteOne({ _id: otpRecord._id });
-			return next(new AppError('OTP has expired!', 400));
-		}
-
 		const userRecord = await User.findOne({ email }).select('-password');
 
-		// Delete all OTPs for this email (cleanup)
-		await OTP.deleteMany({ email, purpose: 'password-reset' });
+		if (!otpRecord) {
+			return next(new AppError('No OTP found for this email. Please request a new one.', 404));
+		}
+
+		if (!userRecord) {
+			return next(new AppError('User not found!', 404));
+		}
+
+		// Check if OTP is valid
+		if (otpRecord.otp !== otp) {
+			// Increment failed attempts
+			otpRecord.attempts += 1;
+			await otpRecord.save();
+
+			// If too many failed attempts, delete the OTP record
+			if (otpRecord.attempts >= 3) {
+				await OTP.deleteOne({ _id: otpRecord._id });
+				return next(new AppError('Too many failed attempts. Please request a new OTP.', 400));
+			}
+
+			return next(new AppError('Invalid OTP. Please try again.', 400));
+		}
 
 		// Generate a temporary token for password reset
 		const { refreshToken } = signToken(userRecord._id, userRecord.email);
-		const tempToken = refreshToken;
+		const tempToken = refreshToken; // Use the refreshToken as a temporary token
 
-		userRecord.refreshToken = tempToken;
+		userRecord.refreshToken = tempToken; // Store the tempToken in refreshToken field
 		await userRecord.save({ validateBeforeSave: false });
+
+		// Delete the OTP record AFTER successful verification
+		await OTP.deleteOne({ _id: otpRecord._id });
 
 		const cookieOptions = {
 			expires: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
@@ -222,7 +311,9 @@ exports.verifyPasswordResetOTP = async (req, res, next) => {
 		res.status(200).json({
 			status: 'success',
 			message: 'OTP verified!',
-			token: { tempToken }
+			token: {
+				tempToken
+			}
 		});
 	} catch (err) {
 		next(err);
@@ -290,6 +381,30 @@ exports.resetPassword = async (req, res, next) => {
 		next(err);
 	}
 }
+
+exports.logout = async (req, res, next) => {
+	try {
+
+		// Delete refresh token from database
+		const user = await User.findById(req.user._id);
+
+		if (user) {
+			user.refreshToken = undefined;
+			await user.save({ validateBeforeSave: false });
+		}
+
+		// Clear the cookies
+		res.clearCookie('accessToken');
+
+		res.status(200).json({
+			status: 'success',
+			message: 'Logged out successfully!',
+			data: null
+		});
+	} catch (err) {
+		next(err);
+	}
+};
 
 exports.refreshToken = async (req, res, next) => {
 	try {

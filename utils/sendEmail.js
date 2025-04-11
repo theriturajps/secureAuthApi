@@ -5,7 +5,7 @@ const sendEmail = async (options) => {
 	try {
 		const mailOptions = {
 			from: {
-				name: "secureAuth",
+				name: "SecureAuth",
 				address: process.env.SMTP_USER,
 			},
 			to: options.email,
@@ -21,16 +21,19 @@ const sendEmail = async (options) => {
 	}
 };
 
-const getSimpleEmailTemplate = (user, content) => {
+const getEmailTemplate = (user, content, subject) => {
 	return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="margin-bottom: 20px;">
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px;">
+        <div style="background-color: #0084ff; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+            <h2>${subject}</h2>
+        </div>
+        <div style="padding: 20px;">
             <p>Dear ${user.email},</p>
             ${content}
-            <p>Thank You,<br><strong>secureAuth Team</strong></p>
+            <p style="margin-top: 30px;">Thank You,<br><strong>SecureAuth Team</strong></p>
         </div>
-        <div style="background-color: #0084ff; color: #fff; padding: 10px; text-align: center; font-size: 12px;">
-            <strong>Note:</strong> This is a system generated email. Please do not reply.
+        <div style="background-color: #f5f5f5; padding: 10px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 8px 8px;">
+            <p>This is an automated message. Please do not reply.</p>
         </div>
     </div>
     `;
@@ -38,37 +41,39 @@ const getSimpleEmailTemplate = (user, content) => {
 
 const sendVerificationEmail = async (user, otp) => {
 	const subject = 'Email Verification';
-	const message = `Your OTP for email verification is ${otp}. It will expire in 10 minutes.`;
-
 	const content = `
-        <p>Please use this OTP to verify your email address:</p>
-        <p style="font-size: 18px; font-weight: bold; color: #0084ff;">${otp}</p>
-        <p><em>This code will expire in 10 minutes.</em></p>
+        <p>Please use the following OTP to verify your email address:</p>
+        <div style="background-color: #f5f5f5; padding: 15px; margin: 20px 0; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px;">
+            ${otp}
+        </div>
+        <p>This OTP will expire in <strong>10 minutes</strong>.</p>
+        <p>If you didn't request this, please ignore this email.</p>
     `;
 
 	await sendEmail({
 		email: user.email,
 		subject,
-		message,
-		html: getSimpleEmailTemplate(user, content)
+		message: `Your verification OTP is ${otp}`,
+		html: getEmailTemplate(user, content, subject)
 	});
 };
 
 const sendPasswordResetOTP = async (user, otp) => {
 	const subject = 'Password Reset OTP';
-	const message = `Your OTP for password reset is ${otp}. It will expire in 10 minutes.`;
-
 	const content = `
-        <p>Please use this OTP to reset your password:</p>
-        <p style="font-size: 18px; font-weight: bold; color: #0084ff;">${otp}</p>
-        <p><em>This code will expire in 10 minutes.</em></p>
+        <p>We received a request to reset your password. Here's your OTP:</p>
+        <div style="background-color: #f5f5f5; padding: 15px; margin: 20px 0; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px;">
+            ${otp}
+        </div>
+        <p>This OTP will expire in <strong>10 minutes</strong>.</p>
+        <p>If you didn't request a password reset, please secure your account.</p>
     `;
 
 	await sendEmail({
 		email: user.email,
 		subject,
-		message,
-		html: getSimpleEmailTemplate(user, content)
+		message: `Your password reset OTP is ${otp}`,
+		html: getEmailTemplate(user, content, subject)
 	});
 };
 
